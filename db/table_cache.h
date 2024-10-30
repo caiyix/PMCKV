@@ -11,8 +11,10 @@
 #include <string>
 
 #include "db/dbformat.h"
+
 #include "leveldb/cache.h"
 #include "leveldb/table.h"
+#include "leveldb/cachetable_builder.h"
 #include "port/port.h"
 
 namespace leveldb {
@@ -37,6 +39,8 @@ class TableCache {
   // returned iterator is live.
   Iterator* NewIterator(const ReadOptions& options, uint64_t file_number,
                         uint64_t file_size, Table** tableptr = nullptr);
+  Iterator* NewCacheIterator(const ReadOptions& options, uint64_t file_number,
+                        uint64_t file_size, CacheTableBuilder* cacheBuilder);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call (*handle_result)(arg, found_key, found_value).
@@ -49,7 +53,7 @@ class TableCache {
 
  private:
   Status FindTable(uint64_t file_number, uint64_t file_size, Cache::Handle**);
-
+  Status FindCacheTable(uint64_t file_number, uint64_t file_size,Cache::Handle** handle,CacheTableBuilder* cacheBuilder);
   Env* const env_;
   const std::string dbname_;
   const Options& options_;

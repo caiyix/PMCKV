@@ -11,6 +11,7 @@
 #include <string>
 
 #include "db/dbformat.h"
+//#include "db/Version_set.h"
 #include "db/log_writer.h"
 #include "db/snapshot.h"
 #include "leveldb/db.h"
@@ -25,6 +26,7 @@ class TableCache;
 class Version;
 class VersionEdit;
 class VersionSet;
+class Compaction;
 
 class DBImpl : public DB {
  public:
@@ -75,6 +77,7 @@ class DBImpl : public DB {
   friend class DB;
   struct CompactionState;
   struct Writer;
+  struct Task;
 
   // Information for a manual compaction
   struct ManualCompaction {
@@ -100,7 +103,6 @@ class DBImpl : public DB {
     int64_t bytes_read;
     int64_t bytes_written;
   };
-
   Iterator* NewInternalIterator(const ReadOptions&,
                                 SequenceNumber* latest_snapshot,
                                 uint32_t* seed);
@@ -116,7 +118,7 @@ class DBImpl : public DB {
   void MaybeIgnoreError(Status* s) const;
 
   // Delete any unneeded files and stale in-memory entries.
-  void RemoveObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void RemoveObsoleteFiles(int deleteFlag,int numoffile) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Compact the in-memory write buffer to disk.  Switches to a new
   // log-file/memtable and writes a new descriptor iff successful.
@@ -140,14 +142,15 @@ class DBImpl : public DB {
   void MaybeScheduleCompaction() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   static void BGWork(void* db);
   void BackgroundCall();
+  Compaction* MergeMultipleCompact (std::vector<Compaction*> compactVector);
   void BackgroundCompaction() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void CleanupCompaction(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   Status DoCompactionWork(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
   Status OpenCompactionOutputFile(CompactionState* compact);
   Status FinishCompactionOutputFile(CompactionState* compact, Iterator* input);
+  void BigFinishCompactionOutputFile(CompactionState* compact,Status s,Task* task);
   Status InstallCompactionResults(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 

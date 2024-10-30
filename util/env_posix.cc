@@ -13,6 +13,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <iostream>
+
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -35,7 +37,7 @@
 #include "port/thread_annotations.h"
 #include "util/env_posix_test_helper.h"
 #include "util/posix_logger.h"
-
+using namespace std;
 namespace leveldb {
 
 namespace {
@@ -56,7 +58,11 @@ constexpr const int kOpenBaseFlags = O_CLOEXEC;
 constexpr const int kOpenBaseFlags = 0;
 #endif  // defined(HAVE_O_CLOEXEC)
 
-constexpr const size_t kWritableFileBufferSize = 65536;
+//constexpr const size_t kWritableFileBufferSize = 65536;
+// constexpr const size_t kWritableFileBufferSize = 131072;
+// constexpr const size_t kWritableFileBufferSize = 2097152;
+//constexpr const size_t kWritableFileBufferSize = 4194304;
+constexpr const size_t kWritableFileBufferSize = 67108864;
 
 Status PosixError(const std::string& context, int error_number) {
   if (error_number == ENOENT) {
@@ -317,6 +323,18 @@ class PosixWritableFile final : public WritableFile {
       return Status::OK();
     }
     return WriteUnbuffered(write_data, write_size);
+  }
+
+  Status Append_buf(const Slice& data) override {
+    //cout<<"test1:in Append_buf"<<endl;
+    size_t write_size = data.size();
+    const char* write_data = data.data();
+    //cout<<"test2:in Append_buf"<<endl;
+    std::memcpy(buf_ + pos_, write_data, write_size);
+    //cout<<"test3:in Append_buf,pos_=="<<pos_<<endl;
+    pos_ += write_size;
+    //cout<<"test4:in Append_buf,pos_=="<<pos_<<endl;
+    return Status::OK();
   }
 
   Status Close() override {

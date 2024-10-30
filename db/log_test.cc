@@ -168,7 +168,7 @@ class LogTest : public testing::Test {
       contents_.append(slice.data(), slice.size());
       return Status::OK();
     }
-
+    Status Append_buf(const Slice& data) override{}
     std::string contents_;
   };
 

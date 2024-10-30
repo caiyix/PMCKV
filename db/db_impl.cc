@@ -11,6 +11,14 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <iostream>
+#include <fstream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <semaphore.h>
+#include <functional>
+
 
 #include "db/builder.h"
 #include "db/db_iter.h"
@@ -19,6 +27,7 @@
 #include "db/log_reader.h"
 #include "db/log_writer.h"
 #include "db/memtable.h"
+
 #include "db/table_cache.h"
 #include "db/version_set.h"
 #include "db/write_batch_internal.h"
@@ -26,6 +35,7 @@
 #include "leveldb/env.h"
 #include "leveldb/status.h"
 #include "leveldb/table.h"
+#include "leveldb/cachetable_builder.h"
 #include "leveldb/table_builder.h"
 #include "port/port.h"
 #include "table/block.h"
@@ -35,6 +45,10 @@
 #include "util/logging.h"
 #include "util/mutexlock.h"
 
+
+using namespace std;
+mutex m;
+#define taskNum 3
 namespace leveldb {
 
 const int kNumNonTableCacheFiles = 10;
@@ -66,6 +80,7 @@ struct DBImpl::CompactionState {
         smallest_snapshot(0),
         outfile(nullptr),
         builder(nullptr),
+        cacheBuilder(nullptr),
         total_bytes(0) {}
 
   Compaction* const compaction;
@@ -81,10 +96,21 @@ struct DBImpl::CompactionState {
   // State kept for output being generated
   WritableFile* outfile;
   TableBuilder* builder;
+  CacheTableBuilder* cacheBuilder;
 
   uint64_t total_bytes;
 };
 
+/*--自定义代码-start--*/
+
+struct DBImpl::Task{
+	thread t;
+	bool flag;
+	int subcount;
+	int id;
+    uint64_t file_size;
+};
+/*--自定义代码-end--*/
 // Fix user-supplied options to be reasonable
 template <class T, class V>
 static void ClipToRange(T* ptr, V minvalue, V maxvalue) {
@@ -113,7 +139,8 @@ Options SanitizeOptions(const std::string& dbname,
     }
   }
   if (result.block_cache == nullptr) {
-    result.block_cache = NewLRUCache(8 << 20);
+    //result.block_cache = NewLRUCache(8 << 20);
+    result.block_cache = NewLRUCache(500 << 20);
   }
   return result;
 }
@@ -221,8 +248,8 @@ void DBImpl::MaybeIgnoreError(Status* s) const {
     *s = Status::OK();
   }
 }
-
-void DBImpl::RemoveObsoleteFiles() {
+//此函数仅作为测试zjncompaction中文件删除操作的正确性：0-other,1-compaction；2-zjncompaction
+void DBImpl::RemoveObsoleteFiles(int deleteFlag,int numoffile) {
   mutex_.AssertHeld();
 
   if (!bg_error_.ok()) {
@@ -234,6 +261,13 @@ void DBImpl::RemoveObsoleteFiles() {
   // Make a set of all of the live files
   std::set<uint64_t> live = pending_outputs_;
   versions_->AddLiveFiles(&live);
+  if(deleteFlag != 0){
+    //cout<<"live file :";
+    //for (auto it = live.cbegin(); it != live.cend(); it++){
+      //cout<<*it<<",";
+    //}
+    //cout<<endl;
+  }
 
   std::vector<std::string> filenames;
   env_->GetChildren(dbname_, &filenames);  // Ignoring errors on purpose
@@ -273,8 +307,13 @@ void DBImpl::RemoveObsoleteFiles() {
         if (type == kTableFile) {
           table_cache_->Evict(number);
         }
-        Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
+        if(deleteFlag == 2){
+          Log(options_.info_log, "zjnDelete type=%d #%lld\n", static_cast<int>(type),
             static_cast<unsigned long long>(number));
+        }else{
+          Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
+            static_cast<unsigned long long>(number));
+        }
       }
     }
   }
@@ -282,10 +321,52 @@ void DBImpl::RemoveObsoleteFiles() {
   // While deleting all files unblock other threads. All files being deleted
   // have unique names which will not collide with newly created files and
   // are therefore safe to delete while allowing other threads to proceed.
+//   ofstream outfile,outfile1;
+//   outfile.open("/home/zjn/桌面/app/leveldb_simple_example/delete.txt",ios::app);
+//   outfile1.open("/home/zjn/桌面/app/leveldb_simple_example/zjndelete.txt",ios::app);
   mutex_.Unlock();
+//    if(deleteFlag == 1){
+//      cout<<"delete file : ";
+//      outfile<<"delete file : ";
+//      outfile<<files_to_delete.size();//files_to_delete
+//      outfile<<"\n";
+//    }
+//    if(deleteFlag == 2){
+//      cout<<"zjndelete file : ";
+//      outfile1<<"zjndelete file : ";
+//      outfile1<<files_to_delete.size();//files_to_delete
+//      outfile1<<"\n";
+//    }
+   if(numoffile != files_to_delete.size() && deleteFlag != 0){
+     //cout<<numoffile<<"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"<<files_to_delete.size()<<endl;
+//      cout<<"live file :";
+//      for (auto it = live.cbegin(); it != live.cend(); it++){
+//        cout<<*it<<",";
+//      }
+//      cout<<endl;
+     Log(options_.info_log, "%d--------!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!--------%zu", numoffile,files_to_delete.size());
+  }
   for (const std::string& filename : files_to_delete) {
+//      if(deleteFlag == 1){
+//        cout<<filename<<",";
+//        outfile<<filename;
+//        outfile<<";";
+//      }
+//      if(deleteFlag == 2){
+//        cout<<filename<<",";
+//        outfile1<<filename;
+//        outfile1<<";";
+//      }
     env_->RemoveFile(dbname_ + "/" + filename);
   }
+//    if(deleteFlag == 1){
+//      cout<<endl;
+//      outfile<<"\n";
+//    }
+//    if(deleteFlag == 2){
+//      cout<<endl;
+//      outfile1<<"\n";
+//    }
   mutex_.Lock();
 }
 
@@ -573,7 +654,7 @@ void DBImpl::CompactMemTable() {
     imm_->Unref();
     imm_ = nullptr;
     has_imm_.store(false, std::memory_order_release);
-    RemoveObsoleteFiles();
+    RemoveObsoleteFiles(0,0);
   } else {
     RecordBackgroundError(s);
   }
@@ -699,6 +780,66 @@ void DBImpl::BackgroundCall() {
   background_work_finished_signal_.SignalAll();
 }
 
+//自定义实现-start
+Compaction* DBImpl::MergeMultipleCompact (vector<Compaction*> compactionVector) {
+  /*
+  for(int i=0;i<compactionVector.size();i++){
+    cout<<"compaction "<<i+1<<":level--"<<compactionVector[i]->level()<<",";
+    for(int j=0;j<compactionVector[i]->num_input_files(0);j++){
+      cout<<"inputs_[0] "<<compactionVector[i]->input(0,j)->number<<",";
+    }
+    for(int j=0;j<compactionVector[i]->num_input_files(1);j++){
+        cout<<"inputs_[1] "<<compactionVector[i]->input(1,j)->number<<",";
+    }
+    cout<<endl;
+  }*/
+  for(int i=0;i<compactionVector.size();i++){
+    if(compactionVector[i]->inputgrandparents().size() > 0){
+      //cout<<"-----------------------------test1:in DBImpl::MergeMultipleCompact-----------------------------"<<endl;
+    }
+  }
+  Compaction* compaction = compactionVector[compactionVector.size()-1];
+  vector<FileMetaData*> newInputs_1,newInputs_2,newInputs_3;
+  for(int i=0;i<compactionVector.size();i++){
+    Compaction* temp = compactionVector[i];
+    for(int j=0;j<temp->inputs(0).size();j++){
+      int size = newInputs_1.size();
+      if(size > 0){
+        if(newInputs_1[size-1] != temp->inputs(0)[j]){
+          newInputs_1.push_back(temp->inputs(0)[j]);
+        }
+      }else{
+        newInputs_1.push_back(temp->inputs(0)[j]);
+      }
+    }
+    for(int j=0;j<temp->inputs(1).size();j++){
+      int size = newInputs_2.size();
+      if(size > 0){
+        if(newInputs_2[size-1] != temp->inputs(1)[j]){
+          newInputs_2.push_back(temp->inputs(1)[j]);
+        }
+      }else{
+        newInputs_2.push_back(temp->inputs(1)[j]);
+      }
+    }
+    for(int j=0;j<temp->inputgrandparents().size();j++){
+      int size = newInputs_3.size();
+      if(size > 0){
+        if(newInputs_3[size-1] != temp->inputgrandparents()[j]){
+          newInputs_3.push_back(temp->inputgrandparents()[j]);
+        }
+      }else{
+        newInputs_3.push_back(temp->inputgrandparents()[j]);
+      }
+    }
+  }
+  compaction->modifyInputs(0,newInputs_1);
+  compaction->modifyInputs(1,newInputs_2);
+  compaction->modifyInputgrandparents(newInputs_3);
+  return compaction;
+}
+
+//自定义实现-end
 void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
@@ -706,10 +847,13 @@ void DBImpl::BackgroundCompaction() {
     CompactMemTable();
     return;
   }
-
   Compaction* c;
+  /*自定义代码-start*/
+  vector<Compaction*> cs;
+  /*自定义代码--end-*/
   bool is_manual = (manual_compaction_ != nullptr);
   InternalKey manual_end;
+  Status status;
   if (is_manual) {
     ManualCompaction* m = manual_compaction_;
     c = versions_->CompactRange(m->level, m->begin, m->end);
@@ -723,40 +867,107 @@ void DBImpl::BackgroundCompaction() {
         (m->end ? m->end->DebugString().c_str() : "(end)"),
         (m->done ? "(end)" : manual_end.DebugString().c_str()));
   } else {
-    c = versions_->PickCompaction();
-  }
-
-  Status status;
-  if (c == nullptr) {
-    // Nothing to do
-  } else if (!is_manual && c->IsTrivialMove()) {
-    // Move file to next level
-    assert(c->num_input_files(0) == 1);
-    FileMetaData* f = c->input(0, 0);
-    c->edit()->RemoveFile(c->level(), f->number);
-    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
-                       f->largest);
-    status = versions_->LogAndApply(c->edit(), &mutex_);
-    if (!status.ok()) {
-      RecordBackgroundError(status);
+    //c = versions_->PickCompaction();
+    /*自定义代码-start*/
+    cs = versions_->PickCompactions();
+    //cout<<"test1:in BackgroundCompaction,cs.size()=="<<cs.size()<<endl;
+    if(cs.size() == 0){
+        // Nothing to do
+    }else if(cs.size() == 1){//任务数为1
+      //cout<<"test1:in BackgroundCompaction,cs.size()=="<<cs.size()<<endl;
+      if (!is_manual && cs[0]->IsTrivialMove()) {
+         // Move file to next level
+          assert(cs[0]->num_input_files(0) == 1);
+          FileMetaData* f = cs[0]->input(0, 0);
+          cs[0]->edit()->RemoveFile(cs[0]->level(), f->number);
+          cs[0]->edit()->AddFile(cs[0]->level() + 1, f->number, f->file_size, f->smallest,
+                            f->largest);
+          status = versions_->LogAndApply(cs[0]->edit(), &mutex_);
+          if (!status.ok()) {
+            RecordBackgroundError(status);
+          }
+          VersionSet::LevelSummaryStorage tmp;
+          Log(options_.info_log, "Moved #%lld to level-%d %lld bytes %s: %s\n",
+              static_cast<unsigned long long>(f->number), cs[0]->level() + 1,
+              static_cast<unsigned long long>(f->file_size),
+              status.ToString().c_str(), versions_->LevelSummary(&tmp));
+        } else {
+          CompactionState* compact = new CompactionState(cs[0]);
+          status = DoCompactionWork(compact);
+          if (!status.ok()) {
+            RecordBackgroundError(status);
+          }
+          CleanupCompaction(compact);
+          cs[0]->ReleaseInputs();
+          if(status.ok()){
+            //cout<<"version is updated !"<<endl;
+            int numoffile = cs[0]->inputs(0).size() + cs[0]->inputs(1).size();
+            RemoveObsoleteFiles(1,numoffile);
+          }
+        }
+        delete cs[0];
+    }else{//任务数超过1
+      //cout<<"test2:in BackgroundCompaction,cs.size()=="<<cs.size()<<endl;
+      vector<Compaction*> compactionVector,compactionVector1;
+      for(int i=0;i<cs.size();i++){
+         if (!is_manual && cs[i]->IsTrivialMove()) {
+           compactionVector1.push_back(cs[i]);
+         } else {
+           compactionVector.push_back(cs[i]);
+         }
+      }
+      for(int i=0;i<compactionVector1.size();i++){
+        if(i > 0){
+          compactionVector1[i]->AddInputs();
+        }
+         assert(compactionVector1[i]->num_input_files(0) == 1);
+         FileMetaData* f = compactionVector1[i]->input(0, 0);
+           compactionVector1[i]->edit()->RemoveFile(compactionVector1[i]->level(), f->number);
+           compactionVector1[i]->edit()->AddFile(compactionVector1[i]->level() + 1, f->number, f->file_size, f->smallest,
+                             f->largest);
+           status = versions_->LogAndApply(compactionVector1[i]->edit(), &mutex_);
+           if (!status.ok()) {
+             RecordBackgroundError(status);
+           }
+           VersionSet::LevelSummaryStorage tmp;
+           Log(options_.info_log, "zjnMoveds #%lld to level-%d %lld bytes %s: %s\n",
+               static_cast<unsigned long long>(f->number), compactionVector1[i]->level() + 1,
+               static_cast<unsigned long long>(f->file_size),
+               status.ToString().c_str(), versions_->LevelSummary(&tmp));
+      }
+      if(compactionVector1.size() > 0){
+        for(int i=0;i<compactionVector1.size();i++){
+          delete compactionVector1[i];
+        }
+      }
+      //cout<<"test2:in BackgroundCompaction,compactVector.size()=="<<compactVector.size()<<endl;
+      if(compactionVector.size() > 0){
+        //执行普通的compaction
+        //cout<<"test3:in BackgroundCompaction,cs.size()=="<<cs.size()<<endl;
+        versions_->ManageMultipleCompact(compactionVector);
+        Compaction* onecTemp = compactionVector.at(compactionVector.size()-1);
+        if(compactionVector.size() > 1){
+          onecTemp = MergeMultipleCompact(compactionVector);
+        }
+        if(compactionVector.size() < cs.size()){
+          onecTemp->modifyInputsVersion(versions_->current());
+          onecTemp->AddInputs();
+        }
+        CompactionState* compact = new CompactionState(onecTemp);
+        status = DoCompactionWork(compact);
+        if (!status.ok()) {
+          RecordBackgroundError(status);
+        }
+        CleanupCompaction(compact);
+        onecTemp->ReleaseInputs();
+        if(status.ok()){
+          int numoffile = onecTemp->inputs(0).size() + onecTemp->inputs(1).size();
+          RemoveObsoleteFiles(2,numoffile);
+        }
+      }
     }
-    VersionSet::LevelSummaryStorage tmp;
-    Log(options_.info_log, "Moved #%lld to level-%d %lld bytes %s: %s\n",
-        static_cast<unsigned long long>(f->number), c->level() + 1,
-        static_cast<unsigned long long>(f->file_size),
-        status.ToString().c_str(), versions_->LevelSummary(&tmp));
-  } else {
-    CompactionState* compact = new CompactionState(c);
-    status = DoCompactionWork(compact);
-    if (!status.ok()) {
-      RecordBackgroundError(status);
-    }
-    CleanupCompaction(compact);
-    c->ReleaseInputs();
-    RemoveObsoleteFiles();
+    /*自定义代码--end-*/
   }
-  delete c;
-
   if (status.ok()) {
     // Done
   } else if (shutting_down_.load(std::memory_order_acquire)) {
@@ -779,13 +990,16 @@ void DBImpl::BackgroundCompaction() {
     manual_compaction_ = nullptr;
   }
 }
-
+//此函数仅为测试按文件写回相关函数cachebuilder类的正确性
 void DBImpl::CleanupCompaction(CompactionState* compact) {
   mutex_.AssertHeld();
-  if (compact->builder != nullptr) {
+  //if (compact->builder != nullptr) {
+  if (compact->cacheBuilder != nullptr) {
     // May happen if we get a shutdown call in the middle of compaction
-    compact->builder->Abandon();
-    delete compact->builder;
+    //compact->builder->Abandon();
+    //delete compact->builder;
+    compact->cacheBuilder->Abandon();
+    delete compact->cacheBuilder;
   } else {
     assert(compact->outfile == nullptr);
   }
@@ -796,10 +1010,11 @@ void DBImpl::CleanupCompaction(CompactionState* compact) {
   }
   delete compact;
 }
-
+//此函数仅为测试按文件写回相关函数cachebuilder类的正确性
 Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact != nullptr);
-  assert(compact->builder == nullptr);
+  //assert(compact->builder == nullptr);
+  assert(compact->cacheBuilder == nullptr);
   uint64_t file_number;
   {
     mutex_.Lock();
@@ -817,33 +1032,44 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
-    compact->builder = new TableBuilder(options_, compact->outfile);
+    //compact->builder = new TableBuilder(options_, compact->outfile);
+    compact->cacheBuilder = new CacheTableBuilder(options_, compact->outfile);
   }
   return s;
 }
 
+//此函数仅为测试按文件写回相关函数cachebuilder类的正确性
 Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
                                           Iterator* input) {
+  //cout<<"----------test in DBImpl::FinishCompactionOutputFile----------"<<endl;
   assert(compact != nullptr);
   assert(compact->outfile != nullptr);
-  assert(compact->builder != nullptr);
+  //assert(compact->builder != nullptr);
+  assert(compact->cacheBuilder != nullptr);
 
   const uint64_t output_number = compact->current_output()->number;
   assert(output_number != 0);
 
   // Check for iterator errors
   Status s = input->status();
-  const uint64_t current_entries = compact->builder->NumEntries();
+  //const uint64_t current_entries = compact->builder->NumEntries();
+  const uint64_t current_entries = compact->cacheBuilder->NumEntries();
   if (s.ok()) {
-    s = compact->builder->Finish();
+    //s = compact->builder->Finish();
+    s = compact->cacheBuilder->Finish();
+    s = compact->cacheBuilder->Flush2Disk();//Flush2Disk这部分代码是需要单独执行的部分。
   } else {
-    compact->builder->Abandon();
+    //compact->builder->Abandon();
+    compact->cacheBuilder->Abandon();
   }
-  const uint64_t current_bytes = compact->builder->FileSize();
+  //const uint64_t current_bytes = compact->builder->FileSize();
+  const uint64_t current_bytes = compact->cacheBuilder->FileSize();
   compact->current_output()->file_size = current_bytes;
   compact->total_bytes += current_bytes;
-  delete compact->builder;
-  compact->builder = nullptr;
+  //delete compact->builder;
+  //compact->builder = nullptr;
+  delete compact->cacheBuilder;
+  compact->cacheBuilder = nullptr;
 
   // Finish and check for file errors
   if (s.ok()) {
@@ -855,6 +1081,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   delete compact->outfile;
   compact->outfile = nullptr;
 
+
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
     Iterator* iter =
@@ -862,16 +1089,82 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
     s = iter->status();
     delete iter;
     if (s.ok()) {
-      Log(options_.info_log, "Generated table #%llu@%d: %lld keys, %lld bytes",
+      Log(options_.info_log, "Generated table #%llu@%d: %lld keys, %lld bytes,key %s to key %s",
           (unsigned long long)output_number, compact->compaction->level(),
           (unsigned long long)current_entries,
-          (unsigned long long)current_bytes);
+          (unsigned long long)current_bytes,compact->current_output()->smallest.user_key().ToString().c_str(),
+          compact->current_output()->largest.user_key().ToString().c_str());
     }
   }
   return s;
 }
+//此函数仅为测试线程分离写操作
+void DBImpl::BigFinishCompactionOutputFile(CompactionState* compact,
+                                          Status s,Task* task) {
+  //cout<<"----------test1 in DBImpl::BigFinishCompactionOutputFile----------"<<s.ToString()<<endl;
+  assert(compact != nullptr);
+  assert(compact->outfile != nullptr);
+  //assert(compact->builder != nullptr);
+  assert(compact->cacheBuilder != nullptr);
+  const uint64_t output_number = compact->current_output()->number;
+  assert(output_number != 0);
+  // Check for iterator errors
+  //Status s = input->status();
+  //const uint64_t current_entries = compact->builder->NumEntries();
+
+  const uint64_t current_entries = compact->cacheBuilder->NumEntries();
+  if (s.ok()) {
+    //s = compact->builder->Finish();
+    s = compact->cacheBuilder->Finish();
+    s = compact->cacheBuilder->Flush2Disk();//Flush2Disk这部分代码是需要单独执行的部分。
+  } else {
+    //compact->builder->Abandon();
+    compact->cacheBuilder->Abandon();
+  }
+  //const uint64_t current_bytes = compact->builder->FileSize();
+  const uint64_t current_bytes = compact->cacheBuilder->FileSize();
+  compact->current_output()->file_size = current_bytes;
+  compact->total_bytes += current_bytes;
+  //delete compact->builder;
+  //compact->builder = nullptr;
+  delete compact->cacheBuilder;
+  compact->cacheBuilder = nullptr;
+
+  // Finish and check for file errors
+  if (s.ok()) {
+    s = compact->outfile->Sync();
+  }
+  if (s.ok()) {
+    s = compact->outfile->Close();
+  }
+  delete compact->outfile;
+  compact->outfile = nullptr;
+
+
+  if (s.ok() && current_entries > 0) {
+    // Verify that the table is usable
+    Iterator* iter =
+        table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
+    s = iter->status();
+    delete iter;
+    if (s.ok()) {
+      Log(options_.info_log, "zjnGenerated table #%llu@%d: %lld keys, %lld bytes,key %s to key %s",
+          (unsigned long long)output_number, compact->compaction->level(),
+          (unsigned long long)current_entries,
+          (unsigned long long)current_bytes,compact->current_output()->smallest.user_key().ToString().c_str(),
+          compact->current_output()->largest.user_key().ToString().c_str());
+    }
+  }
+  if(s.ok()){
+    task->file_size = current_bytes;
+    task->flag = true;
+  }
+  //cout<<"----------test2 in DBImpl::BigFinishCompactionOutputFile----------"<<s.ToString()<<",file-number=="<<output_number<<",file-size=="<<current_bytes<<endl;
+  return;
+}
 
 Status DBImpl::InstallCompactionResults(CompactionState* compact) {
+  //cout<<"test4:in DoCompactionWork: compact->compaction->GetInputsVersion()=="<<compact->compaction->GetInputsVersion()<<endl;
   mutex_.AssertHeld();
   Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes",
       compact->compaction->num_input_files(0), compact->compaction->level(),
@@ -881,26 +1174,57 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   // Add compaction outputs
   compact->compaction->AddInputDeletions(compact->compaction->edit());
   const int level = compact->compaction->level();
+  //cout<<"newfile number--";
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
     compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                          out.smallest, out.largest);
+    //cout<<out.number<<"--"<<out.smallest.user_key().ToString()<<"--"<<out.largest.user_key().ToString()<<",file-size--"<<out.file_size<<endl;
   }
+
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
 
+//此函数仅为测试按文件写回相关函数cachebuilder类的正确性
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
   const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
-
+  ofstream outfile;
+//   outfile.open("/home/zjn/桌面/app/leveldb_simple_example/compaction.txt",ios::app);
+//   outfile<<"compactionFile-";
+//   outfile<<compact->compaction->inputs(0).size()+compact->compaction->inputs(1).size();
+//   outfile<<"::level-";
+//   outfile<<compact->compaction->level();
+//   outfile<<"--";
+  //cout<<compact->compaction->GetInputsVersion()<<"--level-"<<compact->compaction->level()<<"--";
+//   for(int j=0;j<compact->compaction->inputs(0).size();j++){
+      //cout<<"file "<<compact->compaction->inputs(0)[j]->number<<","<<compact->compaction->inputs(0)[j]->smallest.user_key().ToString()<<"--"<<compact->compaction->inputs(0)[j]->largest.user_key().ToString()<<";";
+      //cout<<"file "<<compact->compaction->inputs(0)[j]->number<<";";
+//       outfile<<compact->compaction->inputs(0)[j]->number;
+//       outfile<<";";
+//   }
+//   outfile<<"level-";
+//   outfile<<compact->compaction->level()+1;
+//   outfile<<"--";
+  //cout<<endl<<"level-"<<compact->compaction->level()+1<<"--";
+//   for(int j=0;j<compact->compaction->inputs(1).size();j++){
+      //cout<<"file :"<<compact->compaction->inputs(1)[j]->number<<","<<compact->compaction->inputs(1)[j]->smallest.user_key().ToString()<<"--"<<compact->compaction->inputs(1)[j]->largest.user_key().ToString()<<";";
+      //cout<<"file "<<compact->compaction->inputs(1)[j]->number<<";";
+//       outfile<<compact->compaction->inputs(1)[j]->number;
+//       outfile<<";";
+//   }
+  //cout<<endl;
+//   outfile<<"\n";
   Log(options_.info_log, "Compacting %d@%d + %d@%d files",
       compact->compaction->num_input_files(0), compact->compaction->level(),
       compact->compaction->num_input_files(1),
       compact->compaction->level() + 1);
 
   assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
-  assert(compact->builder == nullptr);
+  //assert(compact->builder == nullptr);
+  assert(compact->cacheBuilder == nullptr);
   assert(compact->outfile == nullptr);
+  //cout<<"test2:in DoCompactionWork"<<endl;
   if (snapshots_.empty()) {
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
@@ -918,6 +1242,8 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   std::string current_user_key;
   bool has_current_user_key = false;
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
+  vector<Task*> threadFlagvec;
+  //cout<<"test2:in DoCompactionWork: compact->compaction->GetInputsVersion()=="<<compact->compaction->GetInputsVersion()<<endl;
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
     // Prioritize immutable compaction work
     if (has_imm_.load(std::memory_order_relaxed)) {
@@ -933,12 +1259,78 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     }
 
     Slice key = input->key();
+    //cout<<"input key order"<<key.ToString()<<endl;
     if (compact->compaction->ShouldStopBefore(key) &&
-        compact->builder != nullptr) {
-      status = FinishCompactionOutputFile(compact, input);
-      if (!status.ok()) {
-        break;
-      }
+        //compact->builder != nullptr) {
+        compact->cacheBuilder != nullptr) {
+      //status = FinishCompactionOutputFile(compact, input);
+      Status s = input->status();
+        if(threadFlagvec.size()>0){
+          Task* task = threadFlagvec[threadFlagvec.size()-1];
+          while(!task->flag){
+            //wait,等待上一个文件写完
+          }
+          if(task->flag){
+            //cout<<"task "<<task->id<<"is finished !"<<endl;
+            compact->outputs[task->id].file_size = task->file_size;
+            compact->total_bytes = compact->total_bytes + task->file_size;
+            if(task->t.joinable()){
+              task->t.join();
+            }
+          }
+        }
+        Task* task = new Task();
+        task->flag=false;
+        task->subcount=0;
+        task->id=threadFlagvec.size();
+        CompactionState* compactTemp = new CompactionState(compact->compaction);;
+        compactTemp->outputs = compact->outputs;
+        compactTemp->smallest_snapshot = compact->smallest_snapshot;
+        compactTemp->total_bytes = compact->total_bytes + compact->cacheBuilder->FileSize();
+        compactTemp->cacheBuilder = compact->cacheBuilder;
+        compact->cacheBuilder = nullptr;
+        compactTemp->outfile = compact->outfile;
+        compact->outfile = nullptr;
+        thread t = thread(std::mem_fn(&DBImpl::BigFinishCompactionOutputFile),this,compactTemp,s,task);
+        task->t=move(t);
+        threadFlagvec.push_back(task);
+    }
+
+    if (compact->compaction->ShouldStopPartition(key) &&
+        //compact->builder != nullptr) {
+        compact->cacheBuilder != nullptr) {
+      //status = FinishCompactionOutputFile(compact, input);
+      //cout<<"----------------------3-----------------------"<<endl;
+      Status s = input->status();
+        if(threadFlagvec.size()>0){
+          Task* task = threadFlagvec[threadFlagvec.size()-1];
+          while(!task->flag){
+            //wait,等待上一个文件写完
+          }
+          if(task->flag){
+            //cout<<"task "<<task->id<<"is finished !"<<endl;
+            compact->outputs[task->id].file_size = task->file_size;
+            compact->total_bytes = compact->total_bytes + task->file_size;
+            if(task->t.joinable()){
+              task->t.join();
+            }
+          }
+        }
+        Task* task = new Task();
+        task->flag=false;
+        task->subcount=0;
+        task->id=threadFlagvec.size();
+        CompactionState* compactTemp = new CompactionState(compact->compaction);;
+        compactTemp->outputs = compact->outputs;
+        compactTemp->smallest_snapshot = compact->smallest_snapshot;
+        compactTemp->total_bytes = compact->total_bytes + compact->cacheBuilder->FileSize();
+        compactTemp->cacheBuilder = compact->cacheBuilder;
+        compact->cacheBuilder = nullptr;
+        compactTemp->outfile = compact->outfile;
+        compact->outfile = nullptr;
+        thread t = thread(std::mem_fn(&DBImpl::BigFinishCompactionOutputFile),this,compactTemp,s,task);
+        task->t=move(t);
+        threadFlagvec.push_back(task);
     }
 
     // Handle key/value, add to state, etc.
@@ -988,37 +1380,87 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 
     if (!drop) {
       // Open output file if necessary
-      if (compact->builder == nullptr) {
+      //if (compact->builder == nullptr) {
+      if (compact->cacheBuilder == nullptr) {
         status = OpenCompactionOutputFile(compact);
         if (!status.ok()) {
           break;
         }
       }
-      if (compact->builder->NumEntries() == 0) {
+      //if (compact->builder->NumEntries() == 0) {
+      if (compact->cacheBuilder->NumEntries() == 0) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
       compact->current_output()->largest.DecodeFrom(key);
-      compact->builder->Add(key, input->value());
+      //compact->builder->Add(key, input->value());
+      compact->cacheBuilder->Add(key, input->value());
 
       // Close output file if it is big enough
-      if (compact->builder->FileSize() >=
+      //if (compact->builder->FileSize() >=
+      if (compact->cacheBuilder->FileSize() >=
           compact->compaction->MaxOutputFileSize()) {
-        status = FinishCompactionOutputFile(compact, input);
-        if (!status.ok()) {
-          break;
+        //这里是遍历所有文件中间环节生成的文件，需要进行流水线，其他两个位置的调用不需要
+        //检查一下上一个文件是否已经写完
+        Status s = input->status();
+        if(threadFlagvec.size()>0){
+          Task* task = threadFlagvec[threadFlagvec.size()-1];
+          while(!task->flag){
+            //wait,等待上一个文件写完
+          }
+          if(task->flag){
+            //cout<<"task "<<task->id<<"is finished !"<<endl;
+            compact->outputs[task->id].file_size = task->file_size;
+            compact->total_bytes = compact->total_bytes + task->file_size;
+            if(task->t.joinable()){
+              task->t.join();
+            }
+          }
         }
+        Task* task = new Task();
+        task->flag=false;
+        task->subcount=0;
+        task->id=threadFlagvec.size();
+        //cout<<"test 1 "<<endl;
+        CompactionState* compactTemp = new CompactionState(compact->compaction);
+        compactTemp->outputs = compact->outputs;
+        compactTemp->smallest_snapshot = compact->smallest_snapshot;
+        compactTemp->total_bytes = compact->total_bytes + compact->cacheBuilder->FileSize();
+        compactTemp->cacheBuilder = compact->cacheBuilder;
+        compact->cacheBuilder = nullptr;
+        compactTemp->outfile = compact->outfile;
+        compact->outfile = nullptr;
+        thread t = thread(std::mem_fn(&DBImpl::BigFinishCompactionOutputFile),this,compactTemp,s,task);
+        task->t=move(t);
+        threadFlagvec.push_back(task);
       }
     }
-
     input->Next();
   }
-
+  //cout<<"test 7 "<<endl;
+  //需要检查子线程中的最后一个文件是否写完
+  if(threadFlagvec.size()>0){
+    Task* task = threadFlagvec[threadFlagvec.size()-1];
+    while(!task->flag){
+      //wait,等待上一个文件写完
+    }
+    if(task->flag){
+      compact->outputs[task->id].file_size = task->file_size;
+      compact->total_bytes = compact->total_bytes + task->file_size;
+      if(task->t.joinable()){
+          task->t.join();
+      }
+    }
+  }
+  //cout<<"test3:in DoCompactionWork: status.ToString()=="<<status.ToString()<<",compact->total_bytes=="<<compact->total_bytes<<",input->status()=="<<input->status().ToString()<<endl;
   if (status.ok() && shutting_down_.load(std::memory_order_acquire)) {
     status = Status::IOError("Deleting DB during compaction");
   }
-  if (status.ok() && compact->builder != nullptr) {
+  //cout<<"test4:in DoCompactionWork: status.ToString()=="<<status.ToString()<<",input->Valid()=="<<input->Valid()<<",input->status()=="<<input->status().ToString()<<endl;
+  //if (status.ok() && compact->builder != nullptr) {
+  if (status.ok() && compact->cacheBuilder != nullptr) {
     status = FinishCompactionOutputFile(compact, input);
   }
+  //cout<<"test5:in DoCompactionWork: status.ToString()=="<<status.ToString()<<",input->Valid()=="<<input->Valid()<<",input->status()=="<<input->status().ToString()<<endl;
   if (status.ok()) {
     status = input->status();
   }
@@ -1040,7 +1482,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   stats_[compact->compaction->level() + 1].Add(stats);
 
   if (status.ok()) {
+    //cout<<"test3:in DoCompactionWork: compact->compaction->GetInputsVersion()=="<<compact->compaction->GetInputsVersion()<<endl;
     status = InstallCompactionResults(compact);
+    //compact->compaction->input_version_ = version_;
   }
   if (!status.ok()) {
     RecordBackgroundError(status);
@@ -1049,6 +1493,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
   return status;
 }
+
 
 namespace {
 
@@ -1510,7 +1955,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
     s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
   }
   if (s.ok()) {
-    impl->RemoveObsoleteFiles();
+    impl->RemoveObsoleteFiles(0,0);
     impl->MaybeScheduleCompaction();
   }
   impl->mutex_.Unlock();

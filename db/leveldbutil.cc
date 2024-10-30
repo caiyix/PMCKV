@@ -17,6 +17,7 @@ class StdoutPrinter : public WritableFile {
     fwrite(data.data(), 1, data.size(), stdout);
     return Status::OK();
   }
+  Status Append_buf(const Slice& data) { return Status::OK();}
   Status Close() override { return Status::OK(); }
   Status Flush() override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }

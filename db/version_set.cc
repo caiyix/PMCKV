@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iostream>
 
 #include "db/filename.h"
 #include "db/log_reader.h"
@@ -18,7 +19,8 @@
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
 #include "util/logging.h"
-
+#define taskNum 3
+using namespace std;
 namespace leveldb {
 
 static size_t TargetFileSize(const Options* options) {
@@ -164,7 +166,8 @@ class Version::LevelFileNumIterator : public Iterator {
  public:
   LevelFileNumIterator(const InternalKeyComparator& icmp,
                        const std::vector<FileMetaData*>* flist)
-      : icmp_(icmp), flist_(flist), index_(flist->size()) {  // Marks as invalid
+      : icmp_(icmp), flist_(flist), index_(flist->size()) {
+        //cout<<"test1:in LevelFileNumIterator"<<endl;// Marks as invalid
   }
   bool Valid() const override { return index_ < flist_->size(); }
   void Seek(const Slice& target) override {
@@ -451,8 +454,10 @@ bool Version::RecordReadSample(Slice internal_key) {
 }
 
 void Version::Ref() { ++refs_; }
+int Version::GetRef() { return refs_; }
 
 void Version::Unref() {
+  //cout<<"-----------1----------refs_ == "<<refs_<<endl;
   assert(this != &vset_->dummy_versions_);
   assert(refs_ >= 1);
   --refs_;
@@ -635,12 +640,14 @@ class VersionSet::Builder {
     }
 
     // Delete files
+    //cout<<"In apply del file : ";
     for (const auto& deleted_file_set_kvp : edit->deleted_files_) {
       const int level = deleted_file_set_kvp.first;
       const uint64_t number = deleted_file_set_kvp.second;
+      //cout<<number<<",";
       levels_[level].deleted_files.insert(number);
     }
-
+    //cout<<endl;
     // Add new files
     for (size_t i = 0; i < edit->new_files_.size(); i++) {
       const int level = edit->new_files_[i].first;
@@ -672,6 +679,7 @@ class VersionSet::Builder {
   void SaveTo(Version* v) {
     BySmallestKey cmp;
     cmp.internal_comparator = &vset_->icmp_;
+
     for (int level = 0; level < config::kNumLevels; level++) {
       // Merge the set of added files with the set of pre-existing files.
       // Drop any deleted files.  Store the result in *v.
@@ -680,20 +688,33 @@ class VersionSet::Builder {
       std::vector<FileMetaData*>::const_iterator base_end = base_files.end();
       const FileSet* added_files = levels_[level].added_files;
       v->files_[level].reserve(base_files.size() + added_files->size());
-      for (const auto& added_file : *added_files) {
-        // Add all smaller files listed in base_
-        for (std::vector<FileMetaData*>::const_iterator bpos =
-                 std::upper_bound(base_iter, base_end, added_file, cmp);
-             base_iter != bpos; ++base_iter) {
-          MaybeAddFile(v, level, *base_iter);
-        }
-
-        MaybeAddFile(v, level, added_file);
-      }
+//       for (const auto& added_file : *added_files) {
+//             // Add all smaller files listed in base_
+//         for (std::vector<FileMetaData*>::const_iterator bpos = std::upper_bound(base_iter, base_end, added_file, cmp); base_iter != bpos; ++base_iter) {
+//           MaybeAddFile(v, level, *base_iter);
+//         }
+//         MaybeAddFile(v, level, added_file);
+//       }
+//       for (; base_iter != base_end; ++base_iter) {
+//          MaybeAddFile(v, level, *base_iter);
+//       }
 
       // Add remaining base files
       for (; base_iter != base_end; ++base_iter) {
-        MaybeAddFile(v, level, *base_iter);
+         MaybeAddFile(v, level, *base_iter);
+      }/**/
+      if(added_files->size() > 0 && level == 3){
+        //cout<<"added_file::";
+      }
+
+      for (const auto& added_file : *added_files) {
+        if(added_files->size() > 0 && level == 3){
+          //cout<<added_file->number<<";";
+        }
+        MaybeAddFile(v, level, added_file);
+      }
+      if(added_files->size() > 0 && level == 3){
+        //cout<<endl;
       }
 
 #ifndef NDEBUG
@@ -712,6 +733,7 @@ class VersionSet::Builder {
       }
 #endif
     }
+
   }
 
   void MaybeAddFile(Version* v, int level, FileMetaData* f) {
@@ -721,11 +743,39 @@ class VersionSet::Builder {
       std::vector<FileMetaData*>* files = &v->files_[level];
       if (level > 0 && !files->empty()) {
         // Must not overlap
-        assert(vset_->icmp_.Compare((*files)[files->size() - 1]->largest,
-                                    f->smallest) < 0);
+        if(!(vset_->icmp_.Compare((*files)[files->size() - 1]->largest,f->smallest) < 0)){
+          //<<"test:in MaybeAddFile,fileinfo is ---f->number== "<<f->number<<",key range is "<<f->smallest.user_key().ToString()<<" -- "<<f->largest.user_key().ToString()<<endl;
+          //cout<<"test:in MaybeAddFile,fileinfo is ---lastf->number== "<<(*files)[files->size() - 1]->number<<",key range is "<<(*files)[files->size() - 1]->smallest.user_key().ToString()<<" -- "<<(*files)[files->size() - 1]->largest.user_key().ToString()<<endl;
+          if(level == 3){
+            //cout<<f->number<<"::"<<f->smallest.user_key().ToString()<<"--"<<f->largest.user_key().ToString()<<endl;
+            //cout<<"first file :: "<<(*files)[0]->number<<"::"<<(*files)[0]->smallest.user_key().ToString()<<"--"<<(*files)[0]->largest.user_key().ToString()<<endl;
+            //cout<<"last file :: "<<(*files)[files->size() - 1]->number<<"::"<<(*files)[files->size() - 1]->smallest.user_key().ToString()<<"--"<<(*files)[files->size() - 1]->largest.user_key().ToString()<<endl;
+          }
+          //不是最后一个，先判断是不是第一个
+          if(vset_->icmp_.Compare(f->largest,(*files)[0]->smallest) < 0){
+            f->refs++;
+            files->insert(files->begin(),f);
+          }else{
+            //需要为这部分文件寻找适当的文件信息插入位置--中间的
+            int i=0;
+            while(i<files->size() && i+1<files->size()){
+              if((vset_->icmp_.Compare((*files)[i]->largest,f->smallest)<0) && (vset_->icmp_.Compare(f->largest,(*files)[i+1]->smallest)<0)){
+                f->refs++;
+                files->insert(files->begin()+i+1,f);
+                break;
+              }
+              i++;
+            }
+          }
+        }else{
+          assert(vset_->icmp_.Compare((*files)[files->size() - 1]->largest,f->smallest) < 0);
+          f->refs++;
+          files->push_back(f);
+        }
+      }else{
+        f->refs++;
+        files->push_back(f);
       }
-      f->refs++;
-      files->push_back(f);
     }
   }
 };
@@ -743,6 +793,7 @@ VersionSet::VersionSet(const std::string& dbname, const Options* options,
       last_sequence_(0),
       log_number_(0),
       prev_log_number_(0),
+      count(0),
       descriptor_file_(nullptr),
       descriptor_log_(nullptr),
       dummy_versions_(this),
@@ -751,6 +802,7 @@ VersionSet::VersionSet(const std::string& dbname, const Options* options,
 }
 
 VersionSet::~VersionSet() {
+  //cout<<"***************1*************"<<endl;
   current_->Unref();
   assert(dummy_versions_.next_ == &dummy_versions_);  // List must be empty
   delete descriptor_log_;
@@ -762,6 +814,7 @@ void VersionSet::AppendVersion(Version* v) {
   assert(v->refs_ == 0);
   assert(v != current_);
   if (current_ != nullptr) {
+    //cout<<"in AppendVersion the old current_ is"<<current_->version_num<<",its ref is == "<<current_->GetRef()<<endl;
     current_->Unref();
   }
   current_ = v;
@@ -772,6 +825,8 @@ void VersionSet::AppendVersion(Version* v) {
   v->next_ = &dummy_versions_;
   v->prev_->next_ = v;
   v->next_->prev_ = v;
+  count++;
+  //cout<<"in AppendVersion the new current_ is"<<current_->version_num<<",its ref is == "<<current_->GetRef()<<endl;
 }
 
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
@@ -790,13 +845,16 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   edit->SetLastSequence(last_sequence_);
 
   Version* v = new Version(this);
+  v->version_num = this->count;
   {
+    //cout<<"---------------------------x--------------------------------"<<endl;
     Builder builder(this, current_);
+    //cout<<"---------------------------y--------------------------------"<<endl;
     builder.Apply(edit);
     builder.SaveTo(v);
   }
   Finalize(v);
-
+  //
   // Initialize new descriptor log file if necessary by creating
   // a temporary file that contains a snapshot of the current version.
   std::string new_manifest_file;
@@ -842,6 +900,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   // Install the new version
   if (s.ok()) {
     AppendVersion(v);
+
     log_number_ = edit->log_number_;
     prev_log_number_ = edit->prev_log_number_;
   } else {
@@ -1060,6 +1119,11 @@ void VersionSet::Finalize(Version* v) {
       best_level = level;
       best_score = score;
     }
+    //cout<<"level "<<level<<" : ";
+    //for(int i=0;i<v->files_[level].size();i++){
+      //cout<<v->files_[level][i]->number<<",";
+    //}
+    //cout<<endl;
   }
 
   v->compaction_level_ = best_level;
@@ -1100,6 +1164,17 @@ int VersionSet::NumLevelFiles(int level) const {
   assert(level >= 0);
   assert(level < config::kNumLevels);
   return current_->files_[level].size();
+}
+
+FileMetaData* VersionSet::NextLevelFile(int level,uint64_t filenumber) const {
+  assert(level >= 0);
+  assert(level < config::kNumLevels);
+  for(int i=0;i<current_->files_[level].size();i++){
+    if(current_->files_[level][i]->number == filenumber && i+1 < current_->files_[level].size()){
+      return current_->files_[level][i+1];
+    }
+  }
+  return 0;
 }
 
 const char* VersionSet::LevelSummary(LevelSummaryStorage* scratch) const {
@@ -1147,8 +1222,10 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
 }
 
 void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
+
   for (Version* v = dummy_versions_.next_; v != &dummy_versions_;
        v = v->next_) {
+    //cout<<"this version number == "<< v->version_num <<",";
     for (int level = 0; level < config::kNumLevels; level++) {
       const std::vector<FileMetaData*>& files = v->files_[level];
       for (size_t i = 0; i < files.size(); i++) {
@@ -1156,6 +1233,7 @@ void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
       }
     }
   }
+  //cout<<endl;
 }
 
 int64_t VersionSet::NumLevelBytes(int level) const {
@@ -1227,6 +1305,12 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   const int space = (c->level() == 0 ? c->inputs_[0].size() + 1 : 2);
   Iterator** list = new Iterator*[space];
   int num = 0;
+  for(int i=0;i<c->inputs_[0].size();i++){
+    //cout<<"test1:in MakeInputIterator,level i:"<<c->inputs_[0][i]->number<<endl;
+  }
+  for(int i=0;i<c->inputs_[1].size();i++){
+    //cout<<"test2:in MakeInputIterator,level i+1:"<<c->inputs_[1][i]->number<<endl;
+  }
   for (int which = 0; which < 2; which++) {
     if (!c->inputs_[which].empty()) {
       if (c->level() + which == 0) {
@@ -1237,12 +1321,16 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
         }
       } else {
         // Create concatenating iterator for the files from this level
+        //cout<<"test1:in MakeInputIterator,iter num=="<<num<<endl;
         list[num++] = NewTwoLevelIterator(
             new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]),
             &GetFileIterator, table_cache_, options);
       }
     }
   }
+  //for(int i=0;i<2;i++){
+
+  //}
   assert(num <= space);
   Iterator* result = NewMergingIterator(&icmp_, list, num);
   delete[] list;
@@ -1303,6 +1391,188 @@ Compaction* VersionSet::PickCompaction() {
   return c;
 }
 
+/*----自定义代码-start----*/
+
+//检查一个任务 是否已存在于任务队列中
+
+bool VersionSet::isExitCompactions(vector<Compaction*> cs,FileMetaData* f){
+  for(int i=0;i<cs.size();i++){
+    Compaction* c = cs[i];
+    //只需要检查i层的第一个文件即可
+    if(f->number == c->inputs_[0][0]->number){
+      return true;//已存在
+    }
+  }
+  return false;
+}
+vector<Compaction*> VersionSet::PickCompactions() {
+  vector<Compaction*> cs;
+  Compaction* c;
+  int level;
+
+  bool isNeedMore = false;
+  // We prefer compactions triggered by too much data in a level over
+  // the compactions triggered by seeks.
+  const bool size_compaction = (current_->compaction_score_ >= 1);
+  const bool seek_compaction = (current_->file_to_compact_ != nullptr);
+  if (size_compaction) {
+    level = current_->compaction_level_;
+    assert(level >= 0);
+    assert(level + 1 < config::kNumLevels);
+    c = new Compaction(options_, level);
+
+    // Pick the first file that comes after compact_pointer_[level]
+    for (size_t i = 0; i < current_->files_[level].size(); i++) {
+      FileMetaData* f = current_->files_[level][i];
+      if (compact_pointer_[level].empty() ||
+          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
+        c->inputs_[0].push_back(f);
+        break;
+      }
+    }
+    if (c->inputs_[0].empty()) {
+      // Wrap-around to the beginning of the key space
+      c->inputs_[0].push_back(current_->files_[level][0]);
+    }
+
+    if(level >= 2){
+      //cout<<"test 1:in VersionSet::PickCompactions"<<endl;
+      isNeedMore = true;
+    }
+
+  } else if (seek_compaction) {
+    //cout<<"test 1:in VersionSet::PickCompactions--seek_compaction"<<endl;
+    level = current_->file_to_compact_level_;
+    c = new Compaction(options_, level);
+    c->inputs_[0].push_back(current_->file_to_compact_);
+  } else {
+    return cs;
+  }
+
+  c->input_version_ = current_;
+  c->input_version_->Ref();
+
+  // Files in level 0 may overlap each other, so pick up all overlapping ones
+  if (level == 0) {
+    InternalKey smallest, largest;
+    GetRange(c->inputs_[0], &smallest, &largest);
+    // Note that the next call will discard the file we placed in
+    // c->inputs_[0] earlier and replace it with an overlapping set
+    // which will include the picked file.
+    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
+    assert(!c->inputs_[0].empty());
+  }
+
+  SetupOtherInputs(c);
+  cs.push_back(c);//第一个任务
+
+  vector<Compaction*> csfromfirst;
+  bool isneedfirst = false;
+  int firstindex = 0;//level的第一个文件相关联的compaction在任务中的索引
+  if(isNeedMore){//需要获取多个连续任务的文件信息
+    //cout<<"test 3:in VersionSet::PickCompactions,isNeedMore=="<<isNeedMore<<endl;
+    //此次寻找中需要判断 最新获取的任务是否已经存在于任务队列中，一旦存在，则停止查找
+    for(size_t j = cs.size(); j < taskNum; j++){//还需的任务数为 总任务数-1
+
+      level = current_->compaction_level_;
+      assert(level >= 0);
+      assert(level + 1 < config::kNumLevels);
+      Compaction* cmore = new Compaction(options_, level);
+
+      // Pick the first file that comes after compact_pointer_[level]
+      for (size_t i = 0; i < current_->files_[level].size(); i++) {
+        FileMetaData* f = current_->files_[level][i];
+        if (compact_pointer_[level].empty() ||
+            icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
+          //不会有更多的任务存在：返回当前队列即可
+          if(isExitCompactions(cs,f)){
+            return cs;
+          }
+          cmore->inputs_[0].push_back(f);
+          break;
+        }
+      }
+      if (cmore->inputs_[0].empty()) {
+        //不会有更多的任务存在：返回当前队列即可
+        if(isExitCompactions(cs,current_->files_[level][0])){
+          return cs;
+        }
+        // Wrap-around to the beginning of the key space
+        //如果将第一个文件加入任务队列，为保证层级iter的正确性，需要将该任务放在compaction队列的第一位
+        cmore->inputs_[0].push_back(current_->files_[level][0]);
+        isneedfirst = true;
+      }
+      cmore->input_version_ = current_;
+      //cmore->input_version_->Ref();
+      SetupOtherInputs(cmore);
+      cs.push_back(cmore);//第i个任务
+      if(isneedfirst){
+        csfromfirst.push_back(cmore);//第i个任务--层级文件的开端
+        firstindex = cs.size()-1;
+      }
+    }
+  }
+  //判断是否需要调整任务顺序
+  if(csfromfirst.size()>0){//需要调整顺序
+    //cout<<"test 1:in VersionSet::PickCompactions--csfromfirst.size()=="<<csfromfirst.size()<<"--"<<csfromfirst[0]->inputs_[0][0]->number<<endl;
+    //first索引之前
+    for(int i=0;i<firstindex;i++){
+      //cout<<"test 2:in VersionSet::PickCompactions--csfromfirst.size()=="<<cs.size()<<"--"<<cs[i]->inputs_[0][0]->number<<endl;
+      if(cs[i]->inputs_[0][0]->number != csfromfirst[0]->inputs_[0][0]->number){
+        csfromfirst.push_back(cs[i]);
+      }
+    }
+  }
+  for(int i=0;i<csfromfirst.size();i++){
+      //cout<<"test 3:in VersionSet::PickCompactions--csfromfirst.size()=="<<csfromfirst.size()<<"--"<<csfromfirst[i]->inputs_[0][0]->number<<":"<<csfromfirst[i]->inputs_[0][0]->smallest.user_key().ToString()<<"--"<<csfromfirst[i]->inputs_[0][0]->largest.user_key().ToString()<<endl;
+    }
+  if(csfromfirst.size()>0){
+    //ManageMultipleCompact(csfromfirst);
+    return csfromfirst;
+
+  }
+  else{
+    //ManageMultipleCompact(cs);
+    return cs;
+  }
+}
+
+void VersionSet::ManageMultipleCompact (vector<Compaction*> compactionVector){
+  int i=0;
+  std::vector<InternalKey> partition_keys_temp;;
+  while(i<compactionVector.size() && i+1<compactionVector.size()){
+    Compaction* temp1 = compactionVector[i];
+    Compaction* temp2 = compactionVector[i+1];
+    uint64_t lastfile,firstfile;
+    if(temp1->inputs(1).size()>0){
+      lastfile = temp1->inputs(1)[temp1->inputs(1).size()-1]->number;//任务i的level i+1的最后一个文件
+    }
+    if(temp2->inputs(1).size()>0){
+      firstfile = temp2->inputs(1)[0]->number;//任务i+1的level i+1的第一个文件
+    }
+    if(lastfile != firstfile){
+      //寻找lastfile的下一个文件，判断该文件是否与firstfile相同
+      FileMetaData* nextfile = NextLevelFile(temp1->level() + 1,lastfile);
+      if(nextfile != nullptr && nextfile->number != firstfile){
+        //cout<<"1-1:next file::"<<nextfile->number<<"::"<<nextfile->smallest.Encode().ToString()<<"--"<<nextfile->largest.Encode().ToString()<<endl;
+        //确认任务i的范围，并将期其最大值设置为结束该文件写的标志
+        InternalKey all_start, all_limit;
+        GetRange2(temp1->inputs_[0], temp1->inputs_[1], &all_start, &all_limit);
+        //cout<<"1-2:partition_keys_temp::"<<all_start.Encode().ToString()<<"--"<<all_limit.Encode().ToString()<<endl;
+        partition_keys_temp.push_back(all_limit);
+      }
+    }
+    i++;
+  }
+  if(partition_keys_temp.size()>0){
+    for(int i=0;i<compactionVector.size();i++){
+      Compaction* temp = compactionVector[i];
+      temp->partition_keys = partition_keys_temp;
+    }
+  }
+}
+
+/*-----自定义代码-end-----*/
 // Finds the largest key in a vector of files. Returns true if files is not
 // empty.
 bool FindLargestKey(const InternalKeyComparator& icmp,
@@ -1507,11 +1777,14 @@ bool Compaction::IsTrivialMove() const {
 }
 
 void Compaction::AddInputDeletions(VersionEdit* edit) {
+  //cout<<"delete file from level : ";
   for (int which = 0; which < 2; which++) {
     for (size_t i = 0; i < inputs_[which].size(); i++) {
       edit->RemoveFile(level_ + which, inputs_[which][i]->number);
+      //cout<<level_ + which<<"-"<<inputs_[which][i]->number<<",";
     }
   }
+  //cout<<endl;
 }
 
 bool Compaction::IsBaseLevelForKey(const Slice& user_key) {
@@ -1558,12 +1831,42 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
     return false;
   }
 }
+bool Compaction::ShouldStopPartition(const Slice& internal_key){
+  const VersionSet* vset = input_version_->vset_;
+  // Scan to find earliest grandparent file that contains key.
+  const InternalKeyComparator* icmp = &vset->icmp_;
+  for(int i=0;i<partition_keys.size();i++){
+    if(icmp->Compare(internal_key,partition_keys[i].Encode()) > 0){
+      //cout<<"1-4::"<<internal_key.ToString()<<"---"<<partition_keys[i].Encode().ToString()<<endl;
+      partition_keys.erase(partition_keys.begin()+i);
+      //cout<<"1-5::partition_keys.size() == "<<partition_keys.size()<<endl;
+      return true;
+    }
+  }
+  return false;
+}
+void Compaction::modifyInputsVersion(Version* v) {
+  input_version_ = nullptr;
+  input_version_ = v;
+}
 
 void Compaction::ReleaseInputs() {
   if (input_version_ != nullptr) {
+    //cout<<"11111111111111111111111111111111111111"<<endl;
     input_version_->Unref();
     input_version_ = nullptr;
   }
 }
 
+
+void Compaction::AddInputs() {
+  if (input_version_ != nullptr) {
+    input_version_->Ref();
+    //cout<<"3333333333333333333333--------------------"<<input_version_->GetRef()<<endl;
+  }
+}
+int Compaction::GetInputsVersion(){
+  return input_version_->version_num;
+  //return input_version_->GetRef();
+}
 }  // namespace leveldb

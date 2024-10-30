@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <iostream>
+
 #include "table/merger.h"
 
 #include "leveldb/comparator.h"
 #include "leveldb/iterator.h"
 #include "table/iterator_wrapper.h"
+
+using namespace std;
 
 namespace leveldb {
 
@@ -29,8 +33,11 @@ class MergingIterator : public Iterator {
   bool Valid() const override { return (current_ != nullptr); }
 
   void SeekToFirst() override {
+    //cout<<"test1:MergingIterator::SeekToFirst,n_=="<<n_<<endl;
     for (int i = 0; i < n_; i++) {
+      //cout<<"test2:MergingIterator::SeekToFirst,n_=="<<i<<",children_[i].Valid()"<<children_[i].Valid()<<endl;
       children_[i].SeekToFirst();
+      //cout<<"test3:MergingIterator::SeekToFirst,n_=="<<i<<",children_[i].Valid()"<<children_[i].Valid()<<endl;
     }
     FindSmallest();
     direction_ = kForward;
@@ -147,14 +154,17 @@ class MergingIterator : public Iterator {
 
 void MergingIterator::FindSmallest() {
   IteratorWrapper* smallest = nullptr;
+  //cout<<"test1:MergingIterator::FindSmallest,n_=="<<n_<<endl;
   for (int i = 0; i < n_; i++) {
     IteratorWrapper* child = &children_[i];
+    //cout<<"test2:MergingIterator::FindSmallest,n_=="<<i<<",child->Valid()=="<<child->Valid()<<endl;
     if (child->Valid()) {
       if (smallest == nullptr) {
         smallest = child;
       } else if (comparator_->Compare(child->key(), smallest->key()) < 0) {
         smallest = child;
       }
+      //cout<<"test2:MergingIterator::FindSmallest,n_=="<<i<<",child->Valid()=="<<smallest->key().ToString()<<endl;
     }
   }
   current_ = smallest;

@@ -23,7 +23,7 @@
 #include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
-
+using namespace std;
 namespace leveldb {
 
 namespace log {
@@ -89,6 +89,7 @@ class Version {
   // Reference count management (so Versions do not disappear out from
   // under live iterators)
   void Ref();
+  int GetRef();
   void Unref();
 
   void GetOverlappingInputs(
@@ -128,7 +129,8 @@ class Version {
         file_to_compact_(nullptr),
         file_to_compact_level_(-1),
         compaction_score_(-1),
-        compaction_level_(-1) {}
+        compaction_level_(-1),
+        version_num(0){}
 
   Version(const Version&) = delete;
   Version& operator=(const Version&) = delete;
@@ -162,6 +164,7 @@ class Version {
   // are initialized by Finalize().
   double compaction_score_;
   int compaction_level_;
+  int version_num;
 };
 
 class VersionSet {
@@ -204,6 +207,7 @@ class VersionSet {
 
   // Return the number of Table files at the specified level.
   int NumLevelFiles(int level) const;
+  FileMetaData* NextLevelFile(int level,uint64_t filenumber) const;
 
   // Return the combined file size of all files at the specified level.
   int64_t NumLevelBytes(int level) const;
@@ -232,6 +236,13 @@ class VersionSet {
   // Otherwise returns a pointer to a heap-allocated object that
   // describes the compaction.  Caller should delete the result.
   Compaction* PickCompaction();
+
+  /*自定义函数-start*/
+  int Getcount(){return count;}
+  bool isExitCompactions(vector<Compaction*> cs,FileMetaData* f);
+  vector<Compaction*> PickCompactions();
+  void ManageMultipleCompact (vector<Compaction*> compactionVector);
+  /*自定义函数-start*/
 
   // Return a compaction object for compacting the range [begin,end] in
   // the specified level.  Returns nullptr if there is nothing in that
@@ -313,6 +324,7 @@ class VersionSet {
   // Per-level key at which the next compaction at that level should start.
   // Either an empty string, or a valid InternalKey.
   std::string compact_pointer_[config::kNumLevels];
+  int count;
 };
 
 // A Compaction encapsulates information about a compaction.
@@ -334,8 +346,19 @@ class Compaction {
   // Return the ith input file at "level()+which" ("which" must be 0 or 1).
   FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
 
+  std::vector<FileMetaData*> inputs(int which) const { return inputs_[which]; }
+  std::vector<FileMetaData*> inputgrandparents() const { return grandparents_; }
+
   // Maximum size of files to build during this compaction.
   uint64_t MaxOutputFileSize() const { return max_output_file_size_; }
+
+  void modifyInputs(int which,std::vector<FileMetaData*> newInputs) {
+    inputs_[which] = newInputs;
+  }
+
+  void modifyInputgrandparents(std::vector<FileMetaData*> newInputs) {
+    grandparents_ = newInputs;
+  }
 
   // Is this a trivial compaction that can be implemented by just
   // moving a single input file to the next level (no merging or splitting)
@@ -352,10 +375,14 @@ class Compaction {
   // Returns true iff we should stop building the current output
   // before processing "internal_key".
   bool ShouldStopBefore(const Slice& internal_key);
+  bool ShouldStopPartition(const Slice& internal_key);
 
   // Release the input version for the compaction, once the compaction
   // is successful.
+  void modifyInputsVersion(Version* v);
   void ReleaseInputs();
+  void AddInputs();
+  int GetInputsVersion();
 
  private:
   friend class Version;
@@ -379,6 +406,7 @@ class Compaction {
   int64_t overlapped_bytes_;  // Bytes of overlap between current output
                               // and grandparent files
 
+  std::vector<InternalKey> partition_keys;
   // State for implementing IsBaseLevelForKey
 
   // level_ptrs_ holds indices into input_version_->levels_: our state

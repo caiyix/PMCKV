@@ -148,6 +148,7 @@ class SpecialEnv : public EnvWrapper {
           return base_->Append(data);
         }
       }
+      Status Append_buf(const Slice& data) {}
       Status Close() { return base_->Close(); }
       Status Flush() { return base_->Flush(); }
       Status Sync() {
@@ -175,6 +176,7 @@ class SpecialEnv : public EnvWrapper {
           return base_->Append(data);
         }
       }
+      Status Append_buf(const Slice& data) {}
       Status Close() { return base_->Close(); }
       Status Flush() { return base_->Flush(); }
       Status Sync() {

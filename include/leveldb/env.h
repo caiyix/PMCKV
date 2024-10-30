@@ -284,6 +284,7 @@ class LEVELDB_EXPORT WritableFile {
   virtual ~WritableFile();
 
   virtual Status Append(const Slice& data) = 0;
+  virtual Status Append_buf(const Slice& data) = 0;
   virtual Status Close() = 0;
   virtual Status Flush() = 0;
   virtual Status Sync() = 0;

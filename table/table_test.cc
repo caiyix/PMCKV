@@ -102,6 +102,7 @@ class StringSink : public WritableFile {
     return Status::OK();
   }
 
+  Status Append_buf(const Slice& data) override{}
  private:
   std::string contents_;
 };
@@ -230,7 +231,7 @@ class TableConstructor : public Constructor {
     source_ = new StringSource(sink.contents());
     Options table_options;
     table_options.comparator = options.comparator;
-    return Table::Open(table_options, source_, sink.contents().size(), &table_);
+    return Table::Open(table_options, source_, sink.contents().size(), 0, &table_);
   }
 
   Iterator* NewIterator() const override {

@@ -5,8 +5,12 @@
 #ifndef STORAGE_LEVELDB_TABLE_ITERATOR_WRAPPER_H_
 #define STORAGE_LEVELDB_TABLE_ITERATOR_WRAPPER_H_
 
+#include <iostream>
+
 #include "leveldb/iterator.h"
 #include "leveldb/slice.h"
+
+using namespace std;
 
 namespace leveldb {
 
@@ -65,6 +69,7 @@ class IteratorWrapper {
   }
   void SeekToFirst() {
     assert(iter_);
+    //cout<<"test1:IteratorWrapper::SeekToFirst"<<endl;
     iter_->SeekToFirst();
     Update();
   }

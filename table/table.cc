@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <iostream>
+
 #include "leveldb/table.h"
 
 #include "leveldb/cache.h"
@@ -14,6 +16,8 @@
 #include "table/format.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
+
+using namespace std;
 
 namespace leveldb {
 
@@ -36,7 +40,53 @@ struct Table::Rep {
 };
 
 Status Table::Open(const Options& options, RandomAccessFile* file,
-                   uint64_t size, Table** table) {
+                   uint64_t size, uint64_t file_number, Table** table) {
+  *table = nullptr;
+  if (size < Footer::kEncodedLength) {
+    cout<<"this file is "<<file_number<<",it's size is "<<size<<endl;
+    return Status::Corruption("file is too short to be an sstable");
+  }
+
+  char footer_space[Footer::kEncodedLength];
+  Slice footer_input;
+  Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
+                        &footer_input, footer_space);
+  if (!s.ok()) return s;
+
+  Footer footer;
+  s = footer.DecodeFrom(&footer_input);
+  if (!s.ok()) return s;
+
+  // Read the index block
+  BlockContents index_block_contents;
+  ReadOptions opt;
+  if (options.paranoid_checks) {
+    opt.verify_checksums = true;
+  }
+  s = ReadBlock(file, opt, footer.index_handle(), &index_block_contents);
+
+  if (s.ok()) {
+    // We've successfully read the footer and the index block: we're
+    // ready to serve requests.
+    Block* index_block = new Block(index_block_contents);
+    Rep* rep = new Table::Rep;
+    rep->options = options;
+    rep->file = file;
+    rep->metaindex_handle = footer.metaindex_handle();
+    rep->index_block = index_block;
+    rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0);
+    rep->filter_data = nullptr;
+    rep->filter = nullptr;
+    *table = new Table(rep);
+    (*table)->ReadMeta(footer);
+  }
+
+  return s;
+}
+
+Status Table::OpenByCacheBuilder(const Options& options, RandomAccessFile* file,
+                   uint64_t size, Table** table,CacheTableBuilder* cacheBuilder) {
+  cout<<"test1:in Table::OpenByCacheBuilder,file_number=="<<endl;
   *table = nullptr;
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");

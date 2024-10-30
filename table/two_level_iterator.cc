@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <iostream>
+
 #include "table/two_level_iterator.h"
 
 #include "leveldb/table.h"
 #include "table/block.h"
 #include "table/format.h"
 #include "table/iterator_wrapper.h"
+
+using namespace std;
 
 namespace leveldb {
 
@@ -75,7 +79,9 @@ TwoLevelIterator::TwoLevelIterator(Iterator* index_iter,
       arg_(arg),
       options_(options),
       index_iter_(index_iter),
-      data_iter_(nullptr) {}
+      data_iter_(nullptr) {
+        //cout<<"test1:in TwoLevelIterator"<<endl;
+      }
 
 TwoLevelIterator::~TwoLevelIterator() = default;
 
@@ -87,6 +93,7 @@ void TwoLevelIterator::Seek(const Slice& target) {
 }
 
 void TwoLevelIterator::SeekToFirst() {
+  //cout<<"test1:in TwoLevelIterator::SeekToFirst"<<endl;
   index_iter_.SeekToFirst();
   InitDataBlock();
   if (data_iter_.iter() != nullptr) data_iter_.SeekToFirst();
@@ -144,6 +151,7 @@ void TwoLevelIterator::SetDataIterator(Iterator* data_iter) {
 }
 
 void TwoLevelIterator::InitDataBlock() {
+  //cout<<"test1:in TwoLevelIterator::InitDataBlock,index_iter_.Valid()=="<<index_iter_.Valid()<<endl;
   if (!index_iter_.Valid()) {
     SetDataIterator(nullptr);
   } else {
@@ -165,6 +173,7 @@ void TwoLevelIterator::InitDataBlock() {
 Iterator* NewTwoLevelIterator(Iterator* index_iter,
                               BlockFunction block_function, void* arg,
                               const ReadOptions& options) {
+  //cout<<"test1:in NewTwoLevelIterator"<<endl;
   return new TwoLevelIterator(index_iter, block_function, arg, options);
 }
 

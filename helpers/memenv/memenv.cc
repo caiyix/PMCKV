@@ -204,7 +204,7 @@ class WritableFileImpl : public WritableFile {
   ~WritableFileImpl() override { file_->Unref(); }
 
   Status Append(const Slice& data) override { return file_->Append(data); }
-
+  virtual Status Append_buf(const Slice& data) override{ return file_->Append(data); }
   Status Close() override { return Status::OK(); }
   Status Flush() override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
